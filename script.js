@@ -3,6 +3,9 @@ const ctx = canvas.getContext("2d");
 
 const maxIter = 100;
 let needsRender = false;
+let isDragging = false;
+let lastX = 0;
+let lastY = 0;
 
 const view = {
     xmin: -2.5,
@@ -28,7 +31,7 @@ function mandelbrot(cx, cy) {
         iter++;
     }
 
-    return iter;
+    return { iter, x, y };
 
 }
 
@@ -44,15 +47,21 @@ function render() {
             const cx = view.xmin + (px / width) * (view.xmax - view.xmin);
             const cy = view.ymin + (py / height) * (view.ymax - view.ymin);
 
-            const iter = mandelbrot(cx, cy);
+            const {iter, x, y } = mandelbrot(cx, cy);
+            
+            let smooth = 0;
+            if (iter !== maxIter) {
+                const mag = x*x + y*y;
+                smooth = iter + 1 - Math.log(Math.log(mag)) / Math.log(2);
+            }
 
-            const color = iter === maxIter ? 0 : iter * 10;
+            const t = smooth / maxIter;
+            const brightness = Math.floor(255 * Math.sqrt(t));
 
             const i = (py * width + px) * 4;
-
-            data[i] = color;
-            data[i+1] = color;
-            data[i+2] = color;
+            data[i] = brightness;
+            data[i+1] = brightness;
+            data[i+2] = brightness;
             data[i+3] = 255;
         }
     }
@@ -80,33 +89,35 @@ document.addEventListener("wheel", (e) => {
   requestRender();
 });
 
-document.addEventListener("keydown", (e) => {
-    console.log(e.key);
-    const step = 0.05 * (view.xmax - view.xmin);
+document.addEventListener("mousedown", (e) => {
+  isDragging = true;
+  lastX = e.clientX;
+  lastY = e.clientY;
+});
 
-    switch (e.key) {
-        case "ArrowLeft":
-        view.xmin -= step;
-        view.xmax -= step;
-        break;
+document.addEventListener("mousemove", (e) => {
+  if (!isDragging) return;
 
-        case "ArrowRight":
-        view.xmin += step;
-        view.xmax += step;
-        break;
+  const dx = e.clientX - lastX;
+  const dy = e.clientY - lastY;
 
-        case "ArrowUp":
-        view.ymin -= step;
-        view.ymax -= step;
-        break;
+  lastX = e.clientX;
+  lastY = e.clientY;
 
-        case "ArrowDown":
-        view.ymin += step;
-        view.ymax += step;
-        break;
-    }
+  const scaleX = (view.xmax - view.xmin) / canvas.width;
+  const scaleY = (view.ymax - view.ymin) / canvas.height;
 
-    requestRender();
+  view.xmin -= dx * scaleX;
+  view.xmax -= dx * scaleX;
+
+  view.ymin -= dy * scaleY;
+  view.ymax -= dy * scaleY;
+
+  requestRender();
+});
+
+document.addEventListener("mouseup", () => {
+  isDragging = false;
 });
 
 function loop() {
@@ -122,7 +133,7 @@ function resizeCanvas() {
   canvas.height = window.innerHeight;
 }
 
-document.addEventListener("resize", () => {
+window.addEventListener("resize", () => {
   resizeCanvas();
   render();
 });
