@@ -1,7 +1,13 @@
 const canvas = document.getElementById("fractalCanvas");
 const ctx = canvas.getContext("2d");
 
-const maxIter = 100;
+const renderCanvas = document.createElement("canvas");
+const renderCtx = renderCanvas.getContext("2d");
+
+const RENDER_SCALE = 3; // render 3x screen size
+
+const INITIAL_VIEW_WIDTH = 3.5;
+
 let needsRender = false;
 let isDragging = false;
 let lastX = 0;
@@ -14,11 +20,14 @@ const view = {
     ymax: 1.2
 }
 
+let camX = 0;
+let camY = 0;
+
 function requestRender() {
     needsRender = true;
 }
 
-function mandelbrot(cx, cy) {
+function mandelbrot(cx, cy, maxIter) {
     let x = 0;
     let y = 0;
     let iter = 0;
@@ -35,28 +44,49 @@ function mandelbrot(cx, cy) {
 
 }
 
-function render() {
-    const width = canvas.width;
-    const height = canvas.height;
+function getMaxIterations() {
+    const viewWidth = view.xmax - view.xmin;
 
-    const image = ctx.createImageData(width, height);
+    // how much we've zoomed in
+    const zoom = INITIAL_VIEW_WIDTH / viewWidth;
+
+    // tweak these numbers to taste
+    const base = 50;
+    const scale = 40;
+
+    return Math.floor(base + scale * Math.log10(zoom));
+}
+
+function render() {
+     const width = renderCanvas.width;
+    const height = renderCanvas.height;
+
+    // current visible fractal size
+    const viewWidth  = view.xmax - view.xmin;
+    const viewHeight = view.ymax - view.ymin;
+
+    // BIG fractal region (matches big render buffer)
+    const renderWidth  = viewWidth  * RENDER_SCALE;
+    const renderHeight = viewHeight * RENDER_SCALE;
+
+    const centerX = (view.xmin + view.xmax) / 2;
+    const centerY = (view.ymin + view.ymax) / 2;
+
+    const renderXmin = centerX - renderWidth / 2;
+    const renderYmin = centerY - renderHeight / 2;
+
+    const image = renderCtx.createImageData(width, height);
     const data = image.data;
 
     for (let py = 0; py < height; py++) {
         for (let px = 0; px < width; px++) {
-            const cx = view.xmin + (px / width) * (view.xmax - view.xmin);
-            const cy = view.ymin + (py / height) * (view.ymax - view.ymin);
 
-            const {iter, x, y } = mandelbrot(cx, cy);
-            
-            let smooth = 0;
-            if (iter !== maxIter) {
-                const mag = x*x + y*y;
-                smooth = iter + 1 - Math.log(Math.log(mag)) / Math.log(2);
-            }
+            const cx = renderXmin + (px / width) * renderWidth;
+            const cy = renderYmin + (py / height) * renderHeight;
 
-            const t = smooth / maxIter;
-            const brightness = Math.floor(255 * Math.sqrt(t));
+            const maxIter = getMaxIterations();
+            const {iter} = mandelbrot(cx, cy, maxIter);
+            const brightness = iter === maxIter ? 0 : Math.floor(255 * iter / maxIter);
 
             const i = (py * width + px) * 4;
             data[i] = brightness;
@@ -66,7 +96,7 @@ function render() {
         }
     }
 
-    ctx.putImageData(image, 0, 0);
+    renderCtx.putImageData(image, 0, 0);
 }
 
 document.addEventListener("wheel", (e) => {
@@ -98,39 +128,85 @@ document.addEventListener("mousedown", (e) => {
 document.addEventListener("mousemove", (e) => {
   if (!isDragging) return;
 
-  const dx = e.clientX - lastX;
-  const dy = e.clientY - lastY;
+  camX -= e.movementX;
+  camY -= e.movementY;
+});
 
-  lastX = e.clientX;
-  lastY = e.clientY;
+document.addEventListener("mouseup", () => {
+  if (!isDragging) return;
+  isDragging = false;
 
-  const scaleX = (view.xmax - view.xmin) / canvas.width;
-  const scaleY = (view.ymax - view.ymin) / canvas.height;
+  // where the camera SHOULD be when centered
+  const centerCamX = (renderCanvas.width  - canvas.width)  / 2;
+  const centerCamY = (renderCanvas.height - canvas.height) / 2;
 
-  view.xmin -= dx * scaleX;
-  view.xmax -= dx * scaleX;
+  // how far user dragged inside the big render
+  const offsetX = camX - centerCamX;
+  const offsetY = camY - centerCamY;
 
-  view.ymin -= dy * scaleY;
-  view.ymax -= dy * scaleY;
+  // convert pixels → fractal units
+  const fractalWidth  = (view.xmax - view.xmin) * RENDER_SCALE;
+  const fractalHeight = (view.ymax - view.ymin) * RENDER_SCALE;
+
+  const scaleX = fractalWidth  / renderCanvas.width;
+  const scaleY = fractalHeight / renderCanvas.height;
+
+  // shift fractal to match what user already sees
+  view.xmin += offsetX * scaleX;
+  view.xmax += offsetX * scaleX;
+  view.ymin += offsetY * scaleY;
+  view.ymax += offsetY * scaleY;
+
+  // recenter camera
+  camX = centerCamX;
+  camY = centerCamY;
 
   requestRender();
 });
 
-document.addEventListener("mouseup", () => {
-  isDragging = false;
-});
-
 function loop() {
   if (needsRender) {
-    render();
+    render();          // heavy (only on zoom)
     needsRender = false;
   }
+
+  drawView();          // cheap (every frame)
   requestAnimationFrame(loop);
 }
 
 function resizeCanvas() {
   canvas.width = window.innerWidth;
   canvas.height = window.innerHeight;
+
+  // resize hidden render buffer bigger than screen
+  renderCanvas.width  = canvas.width  * RENDER_SCALE;
+  renderCanvas.height = canvas.height * RENDER_SCALE;
+
+  // center camera inside the big render
+  camX = (renderCanvas.width  - canvas.width)  / 2;
+  camY = (renderCanvas.height - canvas.height) / 2;
+
+  const canvasAspect = canvas.width / canvas.height;
+  const viewWidth = view.xmax - view.xmin;
+  const newHeight = viewWidth / canvasAspect;
+  const centerY = (view.ymin + view.ymax) / 2;
+
+  view.ymin = centerY - newHeight / 2;
+  view.ymax = centerY + newHeight / 2;
+
+  requestRender();
+}
+
+function drawView() {
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+
+  ctx.drawImage(
+    renderCanvas,
+    camX, camY,                 // crop position
+    canvas.width, canvas.height,// crop size
+    0, 0,
+    canvas.width, canvas.height
+  );
 }
 
 window.addEventListener("resize", () => {
